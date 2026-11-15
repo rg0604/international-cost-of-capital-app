@@ -1,0 +1,8 @@
+streamlit>=1.39,<2
+pandas>=2.2,<3
+altair>=5.4,<7
+requests>=2.32,<3
+pycountry>=24.6,<27
+beautifulsoup4>=4.12,<5
+lxml>=5.3,<7
+xlrd>=2.0.1,<3
