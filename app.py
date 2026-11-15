@@ -280,197 +280,229 @@ def data_source_label(name: str, online: dict, base: dict, status: str) -> str:
 
 
 def main() -> None:
-    st.title("🌐 International Cost of Capital Explorer")
-    st.caption("Project cost of equity, cost of debt, and WACC in USD and a chosen currency · Professor Sergio Rebelo's 2026 lecture methodology")
+    """Lecture-slide-first layout, with detailed manual overrides folded away."""
+    st.markdown("""<style>
+      .block-container {max-width: 1160px; padding-top: 2.0rem;}
+      [data-testid="stSidebar"] {background: #f7f7f7;}
+      [data-testid="stSidebar"] .block-container {padding-top: 1.4rem;}
+      h1 {font-size: 2.1rem !important; letter-spacing: -.035em;}
+      h2 {font-size: 1.3rem !important; letter-spacing: -.02em;}
+      h3 {font-size: 1.08rem !important;}
+      [data-testid="stMetricValue"] {font-size: 1.75rem;}
+      [data-testid="stMetricLabel"] {font-size: .83rem;}
+      div[data-testid="stVerticalBlock"] > div:has(> [data-testid="stMetric"]) {padding-top: .3rem;}
+      hr {margin: .7rem 0 1.2rem;}
+    </style>""", unsafe_allow_html=True)
     if "refresh_counter" not in st.session_state:
         st.session_state.refresh_counter = 0
-    with st.sidebar:
-        st.header("Project assumptions")
-        country = st.selectbox("Target country", country_options(), index=country_options().index(US_NAME))
-        with st.form("core_assumptions"):
-            erp_pp = st.number_input("Equity risk premium (%)", min_value=0.0,max_value=50.0,value=6.5,step=0.25)
-            debt_pp = st.slider("Target debt financing (%)",min_value=0,max_value=95,value=30,step=1)
-            tax_jurisdiction = st.radio("Project tax rate used in BOTH currencies", ["U.S. corporate tax rate","Selected-country tax rate"], horizontal=False)
-            st.form_submit_button("Apply assumptions")
-        if st.button("↻ Refresh data from source websites", use_container_width=True):
-            st.session_state.refresh_counter += 1
-            st.rerun()
-        st.caption("Refresh attempts all four source downloads. Some websites block automated retrieval; dated snapshots and manual overrides are indicated below.")
-    with st.spinner("Checking source websites (first load can take a little while)…"):
+    with st.spinner("Loading source data…"):
         info = source_bundle(st.session_state.refresh_counter)
     industry_frame = info["beta"]
-    industries = sorted(set(industry_frame["industry"].tolist()+[DEFAULT_INDUSTRY]))
-    industry = st.selectbox("U.S. industry (Damodaran)", industries,
-                            index=industries.index(DEFAULT_INDUSTRY))
-    exact = industry_frame[industry_frame["industry"].str.casefold()==industry.casefold()]
-    # Allow small source-label differences without guessing unrelated industries.
-    if exact.empty and industry == DEFAULT_INDUSTRY and not industry_frame.empty:
-        exact = industry_frame[industry_frame["industry"].str.contains(r"software.*(system|application)", case=False, regex=True)]
-    beta_from_source = float(exact.iloc[0]["beta_u"]) if not exact.empty else None
+    industries = sorted(set(industry_frame["industry"].tolist() + [DEFAULT_INDUSTRY]))
+    country_list = country_options()
+
+    with st.sidebar:
+        st.subheader("Project assumptions")
+        if st.button("↻ Refresh sources data", use_container_width=True):
+            st.session_state.refresh_counter += 1
+            st.rerun()
+        industry = st.selectbox("U.S. industry", industries, index=industries.index(DEFAULT_INDUSTRY))
+        st.caption("Damodaran's U.S. industry unlevered beta")
+        exact = industry_frame[industry_frame["industry"].str.casefold() == industry.casefold()]
+        if exact.empty and industry == DEFAULT_INDUSTRY and not industry_frame.empty:
+            exact = industry_frame[industry_frame["industry"].str.contains(r"software.*(system|application)", case=False, regex=True)]
+        source_beta = float(exact.iloc[0]["beta_u"]) if not exact.empty else None
+        if source_beta is None:
+            st.warning("Industry beta unavailable; enter a manual value below.")
+        beta_override = st.checkbox("Enter unlevered beta manually", value=source_beta is None)
+        if beta_override:
+            beta_u = st.number_input("Unlevered beta", 0.0, 10.0,
+                 value=float(source_beta if source_beta is not None else 0.80), step=0.05)
+        else:
+            beta_u = source_beta
+        st.number_input("Annual equity risk premium (%)", min_value=0.0, max_value=50.0,
+                        value=6.5, step=0.25, key="erp_pp")
+        st.slider("Fraction financed with debt (%)", 0, 95, value=30, key="debt_pp")
+        spread = info["spread"]
+        spread_override = st.checkbox("Override BBB borrowing spread", value=spread is None)
+        if spread_override:
+            usd_spread_pp = st.number_input("USD borrowing spread (%)", 0.0, 40.0,
+                    value=float(spread if spread is not None else 1.5), step=0.05)
+        else:
+            usd_spread_pp = spread
+        if spread is None:
+            st.caption("1.50% is only the lecture illustration, not a current market quote.")
+        country = st.selectbox("Project country / currency", country_list,
+                      index=country_list.index(US_NAME))
+        use_local_tax = st.checkbox("Override corporate tax rate selection: use target country", value=False)
+        st.caption("Unselected: U.S. corporate tax rate. One project tax rate applies in both currencies.")
+
+    # Inputs shared between the two currency calculations
     tax_us = info["tax"].get(US_NAME)
     tax_local = info["tax"].get(country)
     rf_us = info["yields"].get(US_NAME)
     rf_local = info["yields"].get(country)
-    spread = info["spread"]
 
-    st.subheader("Market data and overrides")
-    st.caption("All rates below are in percent per annum. Checked overrides replace downloaded or dated source values; no hidden estimates are used.")
-    with st.container(border=True):
-        c1,c2,c3 = st.columns(3)
-        with c1:
-            st.markdown("**Operating risk and credit**")
-            auto_beta = beta_from_source
-            if auto_beta is None:
-                st.warning("No downloaded beta for this industry. Supply a manual unlevered beta; illustrative default 0.80 comes from the lecture's Colombia example, NOT from Software industry data.")
-            beta_override = st.checkbox("Override unlevered beta", value=auto_beta is None)
-            beta_u = st.number_input("Unlevered beta βᵤ",min_value=0.0,max_value=10.0,
-                    value=float(auto_beta if auto_beta is not None else 0.80),step=0.05,
-                    disabled=not beta_override, key="beta_u_manual") if beta_override else auto_beta
-            if beta_u is None:
-                st.error("Unlevered beta is required")
-                st.stop()
-            if spread is None:
-                st.warning("Live BBB spread unavailable. 1.50% below is the lecture's illustrative Colombia spread, NOT a current Damodaran quote.")
-            spread_override = st.checkbox("Override USD BBB credit spread", value=spread is None)
-            usd_spread_pp = st.number_input("USD BBB spread (%)",min_value=0.0,max_value=40.0,
-                     value=float(spread if spread is not None else 1.50),step=0.05,
-                     disabled=not spread_override) if spread_override else spread
-        with c2:
-            st.markdown("**U.S. market inputs**")
-            override_us_yield = st.checkbox("Override U.S. 10-year yield")
-            us_yield_pp = st.number_input("U.S. 10-year government yield (%)",min_value=-10.0,max_value=60.0,
-                     value=float(rf_us if rf_us is not None else 0),step=0.1,
-                     disabled=not override_us_yield)
-            if rf_us is None and not override_us_yield:
-                st.error("U.S. yield unavailable. Enable manual override.")
-                st.stop()
-            override_us_tax = st.checkbox("Override U.S. corporate tax rate")
-            us_tax_pp = st.number_input("U.S. corporate tax (%)",min_value=0.0,max_value=65.0,
-                     value=float(tax_us if tax_us is not None else 0),step=0.1,
-                     disabled=not override_us_tax)
-            if tax_us is None and not override_us_tax:
-                st.error("U.S. corporate tax unavailable. Enable manual override.")
-                st.stop()
-        with c3:
-            st.markdown(f"**{country} market inputs**")
-            override_local_yield = st.checkbox("Override selected-country 10-year yield")
-            local_yield_pp = st.number_input("Selected-country 10-year yield (%)",min_value=-10.0,max_value=100.0,
-                    value=float(rf_local if rf_local is not None else 0),step=0.1,
-                    disabled=not override_local_yield)
-            if rf_local is None and not override_local_yield:
-                st.error(f"No government yield available for {country}. Enable its manual override.")
-                st.stop()
-            override_local_tax = st.checkbox("Override selected-country corporate tax")
-            local_tax_pp = st.number_input("Selected-country corporate tax (%)",min_value=0.0,max_value=65.0,
-                     value=float(tax_local if tax_local is not None else 0),step=0.1,
-                     disabled=not override_local_tax)
-            if tax_local is None and not override_local_tax and tax_jurisdiction == "Selected-country tax rate":
-                st.error("Selected-country tax data unavailable. Enable manual tax override.")
-                st.stop()
-            local_spread_override = st.checkbox("Override foreign-currency BBB spread", value=False)
-            local_spread_pp = st.number_input("Foreign-currency BBB spread (%)",min_value=0.0,max_value=40.0,
-                     value=float(usd_spread_pp*(1+local_yield_pp/100)/(1+us_yield_pp/100)),
-                     step=0.05,disabled=not local_spread_override)
-    project_tax_pp = us_tax_pp if tax_jurisdiction.startswith("U.S.") else local_tax_pp
-    result = compute(beta_u,debt_pp/100,project_tax_pp/100,erp_pp/100,us_yield_pp/100,
-                     local_yield_pp/100,usd_spread_pp/100,
-                     local_spread_pp/100 if local_spread_override else None)
-    st.caption(f"**Applied tax rate: {project_tax_pp:.2f}%** ({tax_jurisdiction}). Both currency scenarios use this exact rate. "
-               f"Relevered equity beta: **{result['beta_e']:.4f}** · Target debt/equity: **{result['d_e']:.4f}** · "
-               f"Foreign spread: **{rate(result['spread_local'])}** ({'manual' if local_spread_override else 'auto-converted'}).")
+    st.title("Cost of capital")
+    st.caption("U.S. industry betas, corporate taxes, BBB borrowing spreads, and 10-year government bond yields")
+    st.subheader("10-year yields used in the calculation")
+    ycol1, ycol2 = st.columns(2, gap="large")
+    with ycol1:
+        us_yield_manual = st.checkbox("Enter U.S. 10-year yield manually", value=rf_us is None)
+        if us_yield_manual:
+            us_yield_pp = st.number_input("U.S. 10-year yield (%)", min_value=-10.0, max_value=60.0,
+                    value=float(rf_us if rf_us is not None else 4.9), step=0.10)
+        else:
+            us_yield_pp = rf_us
+        st.caption(f"Source: {info['yield_status']}")
+    with ycol2:
+        st.markdown(f"**Selected country: {country}**")
+        if country == US_NAME:
+            st.caption("The selected country is the United States (USD). No currency conversion is needed.")
+            local_yield_pp = us_yield_pp
+            local_yield_manual = False
+        else:
+            local_yield_manual = st.checkbox("Enter selected-country yield manually", value=rf_local is None)
+            if local_yield_manual:
+                local_yield_pp = st.number_input(f"{country} 10-year yield (%)", min_value=-10.0,
+                      max_value=100.0, value=float(rf_local if rf_local is not None else 0.0), step=0.10)
+            else:
+                local_yield_pp = rf_local
+            st.caption(f"Source: {info['yield_status']}")
+    if us_yield_pp is None or local_yield_pp is None:
+        st.error("Yield is missing. Enable the appropriate manual yield input.")
+        st.stop()
 
-    st.subheader("Cost of capital · side-by-side")
-    usd,local=st.columns(2)
-    for col,side,name in [(usd,"us","USD"),(local,"local",f"{country} currency")]:
-        with col:
-            with st.container(border=True):
-                st.markdown(f"#### {name}")
-                st.metric("WACC",rate(result[f"wacc_{side}"]))
-                a,b=st.columns(2)
-                a.metric("Cost of equity", rate(result[f"re_{side}"]))
-                b.metric("Pretax cost of debt",rate(result[f"rd_{side}"]))
-                st.caption(f"After-tax cost of debt: {rate(result[f'rd_{side}']*(1-result['tax']))}")
+    # Tax overrides are required by the assignment but belong in secondary settings.
+    with st.expander("Advanced inputs: tax rates and foreign-currency borrowing spread"):
+        a,b = st.columns(2)
+        with a:
+            tax_us_override = st.checkbox("Override U.S. corporate tax rate", value=tax_us is None)
+            if tax_us_override:
+                tax_us_pp = st.number_input("U.S. tax rate (%)", 0.0, 65.0,
+                              value=float(tax_us if tax_us is not None else 25.5), step=0.1)
+            else:
+                tax_us_pp = tax_us
+        with b:
+            tax_local_override = st.checkbox("Override selected-country corporate tax rate", value=False)
+            if tax_local_override:
+                tax_local_pp = st.number_input(f"{country} tax rate (%)", 0.0, 65.0,
+                              value=float(tax_local if tax_local is not None else 25.0), step=0.1)
+            else:
+                tax_local_pp = tax_local
+        fx_factor = (1 + local_yield_pp/100)/(1 + us_yield_pp/100)
+        auto_local_spread = usd_spread_pp * fx_factor
+        foreign_override = st.checkbox("Override foreign-currency BBB borrowing spread", value=False,
+                                     disabled=(country == US_NAME))
+        if foreign_override:
+            local_spread_pp = st.number_input("Foreign-currency borrowing spread (%)", 0.0, 40.0,
+                                        value=float(auto_local_spread), step=0.05)
+        else:
+            local_spread_pp = auto_local_spread
+        st.caption("Default foreign spread is USD BBB spread × (1 + foreign 10-year yield) / (1 + U.S. 10-year yield).")
+    tax_pp = tax_local_pp if use_local_tax else tax_us_pp
+    if tax_pp is None:
+        st.error("The chosen jurisdiction's corporate tax rate is unavailable. Enable its manual override in Advanced inputs.")
+        st.stop()
+    if usd_spread_pp is None:
+        st.error("The USD BBB spread could not be retrieved; enable its manual override in the sidebar.")
+        st.stop()
 
-    graph_rows=[]
-    for label,key in [("Cost of equity","re"),("Pretax debt cost","rd"),("WACC","wacc")]:
-        graph_rows.append({"Component":label,"Currency":"USD","Rate (%)":100*result[f"{key}_us"]})
-        graph_rows.append({"Component":label,"Currency":country,"Rate (%)":100*result[f"{key}_local"]})
-    chart=alt.Chart(pd.DataFrame(graph_rows)).mark_bar().encode(
-        x=alt.X("Component:N",title=None),y=alt.Y("Rate (%):Q",title="Annualized percent"),
-        color="Currency:N",xOffset="Currency:N",tooltip=["Component","Currency",alt.Tooltip("Rate (%):Q",format=".4f")])
-    st.altair_chart(chart, use_container_width=True)
+    result = compute(beta_u, st.session_state.debt_pp / 100, tax_pp/100,
+            st.session_state.erp_pp/100, us_yield_pp/100, local_yield_pp/100,
+            usd_spread_pp/100, local_spread_pp/100 if foreign_override else None)
 
-    st.subheader("All-industry comparison")
-    if industry_frame.empty:
-        st.warning("Cannot construct an actual all-industry comparison until Damodaran's beta workbook downloads successfully. Use Refresh; the selected-project manual beta still works.")
-    else:
+    st.subheader("Borrowing spreads")
+    sc1, sc2 = st.columns(2)
+    sc1.metric("Borrowing spread · USD", f"{usd_spread_pp:.4f}%")
+    sc2.metric(f"Borrowing spread · {country}", f"{result['spread_local']*100:.4f}%")
+    st.caption(f"USD credit benchmark: {info['spread_status']}. The foreign spread is {'manually overridden' if foreign_override else 'converted using the government-yield factor'}. ")
+    st.divider()
+
+    st.subheader(industry)
+    st.caption(f"{country} · U.S. industry beta data: {info['beta_status']}. Applied corporate tax: {tax_pp:.2f}% ({'selected country' if use_local_tax else 'United States'}).")
+    m1,m2,m3,m4 = st.columns(4)
+    m1.metric("U.S. 10-year yield", f"{us_yield_pp:.3f}%")
+    m2.metric("Selected 10-year yield", f"{local_yield_pp:.3f}%")
+    m3.metric("Corporate tax rate", f"{tax_pp:.2f}%")
+    m4.metric("Unlevered beta", f"{beta_u:.4f}")
+    st.divider()
+    left,right = st.columns(2, gap="large")
+    with left:
+        st.markdown("**USD cost of capital**")
+        st.metric("Equity cost of capital · USD", rate(result["re_us"]))
+        st.metric("WACC · USD", rate(result["wacc_us"]))
+        st.caption(f"Pretax debt cost: {rate(result['rd_us'])} · After-tax: {rate(result['rd_us']*(1-result['tax']))}")
+    with right:
+        st.markdown(f"**{country} cost of capital**")
+        st.metric(f"Equity cost of capital · {country}", rate(result["re_local"]))
+        st.metric(f"WACC · {country}", rate(result["wacc_local"]))
+        st.caption(f"Pretax debt cost: {rate(result['rd_local'])} · After-tax: {rate(result['rd_local']*(1-result['tax']))}")
+    st.caption(f"Relevered beta: {result['beta_e']:.4f} · Debt financing: {st.session_state.debt_pp}% · ERP: {st.session_state.erp_pp:.2f}% · Identical project tax rate in both currencies.")
+
+    # Keep all assignment-required comparisons and downloads without overwhelming the landing page.
+    with st.expander("All-industry comparison and CSV exports", expanded=False):
         comparison=[]
         for _,row in industry_frame.iterrows():
-            r=compute(float(row.beta_u),debt_pp/100,project_tax_pp/100,erp_pp/100,
-                      us_yield_pp/100,local_yield_pp/100,usd_spread_pp/100,
-                      local_spread_pp/100 if local_spread_override else None)
-            comparison.append({"Industry":row.industry,"Unlevered beta":r["beta_u"],
-                "Levered beta":r["beta_e"], "USD equity cost (%)":r["re_us"]*100,
-                "Foreign equity cost (%)":r["re_local"]*100,
-                "USD debt cost (%)":r["rd_us"]*100,"Foreign debt cost (%)":r["rd_local"]*100,
-                "USD WACC (%)":r["wacc_us"]*100,"Foreign WACC (%)":r["wacc_local"]*100})
-        comparison_df=pd.DataFrame(comparison)
-        st.dataframe(comparison_df,hide_index=True,use_container_width=True)
-        st.download_button("Download all-industry comparison (CSV)",comparison_df.to_csv(index=False).encode("utf-8"),
-                           "international_cost_of_capital_all_industries.csv",mime="text/csv")
+            r=compute(float(row.beta_u), st.session_state.debt_pp/100, tax_pp/100,
+                  st.session_state.erp_pp/100, us_yield_pp/100, local_yield_pp/100,
+                  usd_spread_pp/100, local_spread_pp/100 if foreign_override else None)
+            comparison.append({"Industry":row.industry,"Unlevered beta":r['beta_u'],
+                  "Levered beta":r['beta_e'],"USD equity cost (%)":r['re_us']*100,
+                  "Foreign equity cost (%)":r['re_local']*100,
+                  "USD debt cost (%)":r['rd_us']*100,"Foreign debt cost (%)":r['rd_local']*100,
+                  "USD WACC (%)":r['wacc_us']*100,"Foreign WACC (%)":r['wacc_local']*100})
+        if comparison:
+            comparison_df=pd.DataFrame(comparison)
+            st.dataframe(comparison_df, hide_index=True, use_container_width=True)
+            st.download_button("Download all-industry comparison CSV", comparison_df.to_csv(index=False).encode(),
+                               "all_industry_cost_of_capital.csv", mime="text/csv")
+        else:
+            st.warning("Damodaran beta dataset unavailable, so all-industry comparison cannot be generated. Refresh the source data.")
+        export={"Industry":industry,"Country":country,"Unlevered beta":beta_u,
+                "Relevered beta":result['beta_e'],"ERP (%)":st.session_state.erp_pp,
+                "Debt share (%)":st.session_state.debt_pp,"Project tax jurisdiction":"Foreign" if use_local_tax else "US",
+                "Applied tax (%)":tax_pp,"US 10-year yield (%)":us_yield_pp,"Foreign 10-year yield (%)":local_yield_pp,
+                "USD BBB spread (%)":usd_spread_pp,"Foreign BBB spread (%)":result['spread_local']*100,
+                "Foreign spread override":foreign_override,"USD equity cost (%)":result['re_us']*100,
+                "Foreign equity cost (%)":result['re_local']*100,"USD debt cost (%)":result['rd_us']*100,
+                "Foreign debt cost (%)":result['rd_local']*100,"USD WACC (%)":result['wacc_us']*100,
+                "Foreign WACC (%)":result['wacc_local']*100,"Fetch time UTC":info['fetched_at'],
+                "Beta source":info['beta_status'],"Spread source":info['spread_status'],
+                "Tax source":info['tax_status'],"Yield source":info['yield_status']}
+        st.download_button("Download this project's inputs and results CSV",
+                           pd.DataFrame([export]).to_csv(index=False).encode(),
+                           "cost_of_capital_selected_project.csv", mime="text/csv", type="primary")
 
-    st.subheader("Download selected-project calculations")
-    export={"Timestamp (UTC)":info["fetched_at"],"Industry":industry,"Country":country,
-       "Beta source":info["beta_status"] if not beta_override else "Manual beta (or illustrative starting value)",
-       "Unlevered beta":beta_u,"Levered beta":result["beta_e"],
-       "ERP (%)":erp_pp,"Debt share (%)":debt_pp,"Tax source selection":tax_jurisdiction,
-       "Applied tax (%)":project_tax_pp,"U.S. yield (%)":us_yield_pp,"Foreign yield (%)":local_yield_pp,
-       "USD BBB spread (%)":usd_spread_pp,"Foreign BBB spread (%)":result["spread_local"]*100,
-       "Foreign spread manual":local_spread_override,"USD equity (%)":result["re_us"]*100,
-       "Foreign equity (%)":result["re_local"]*100,"USD debt (%)":result["rd_us"]*100,
-       "Foreign debt (%)":result["rd_local"]*100,"USD WACC (%)":result["wacc_us"]*100,
-       "Foreign WACC (%)":result["wacc_local"]*100,"Beta URL":BETA_URL,
-       "Credit URL":SPREAD_URL,"Tax URL":TAX_URL,"Government yield URL":TE_URL,
-       "Source beta status":info["beta_status"],"Source BBB status":info["spread_status"],
-       "Source tax status":info["tax_status"],"Source yields status":info["yield_status"]}
-    st.download_button("Download selected project (CSV)",pd.DataFrame([export]).to_csv(index=False).encode(),
-                        "international_cost_of_capital_project.csv",mime="text/csv",type="primary")
-
-    with st.expander("Formulas, assumptions, sources and retrieval notes",expanded=True):
+    with st.expander("Calculation methodology and data sources", expanded=False):
         st.markdown(r"""
-**Lecture equations (slides 579–585):**
+**Professor Rebelo's lecture formulas (slides 578–585):**
 
-- Debt/equity: \(D/E=d/(1-d)\).
+- Debt-to-equity: \(D/E=d/(1-d)\).
 - Relevered equity beta: \(\beta_E=\beta_U[1+(1-\tau)D/E]\).
-- USD equity cost: \(R_e=R_{f,USD}+\beta_E\times ERP\).
-- USD pretax debt cost: \(R_d=R_{f,USD}+s\), where \(s\) is the Baa2/BBB spread.
-- Gross currency adjustment factor: \(F=(1+R_{f,foreign})/(1+R_{f,USD})\).
-- Foreign equity cost: \(R_e^*=(1+R_e)F-1\).
-- Auto-converted foreign borrowing spread: \(s^*=sF\), unless manually overridden.
-- Foreign pretax debt cost: \(R_d^*=R_{f,foreign}+s^*\).
-- In either currency: \(WACC=(1-d)R_e+dR_d(1-\tau)\).
+- USD cost of equity: \(R_e=R_{f,USD}+\beta_E ERP\).
+- USD borrowing cost: \(R_d=R_{f,USD}+s_{USD}\).
+- Gross currency factor: \(F=(1+R_{f,foreign})/(1+R_{f,USD})\).
+- Foreign equity: \(R_e^*=(1+R_e)F-1\).
+- Foreign spread: \(s^*=s_{USD}F\) unless overridden.
+- Foreign debt: \(R_d^*=R_{f,foreign}+s^*\).
+- Both WACCs: \(WACC=(1-d)R_e+dR_d(1-\tau)\).
 
-**Interpretation:** Government bond yields are proxies for risk-free rates, rather than perfectly risk-free investments. Currency conversion assumes comparable real rates and relative purchasing power parity. No separate country equity risk premium is added. The same target leverage, ERP, and chosen tax rate apply in both scenarios. A selected-country currency does not mean spot FX conversion of rates.
-
-**Data limitations:** Live scraping of Trading Economics and OECD may be blocked or their markup may change. Dates and source status are disclosed; dated lecture snapshots are not real-time quotes. For investment use, independently confirm quoted inputs. The manual override gives you control when a series cannot be retrieved. No API key is required by this app; Trading Economics may restrict scraping.
+**Assumptions:** U.S. market is the systematic-risk benchmark; government yields proxy for risk-free rates; equal real rates and relative PPP guide currency conversion. No additional country equity premium is included. The same debt share, ERP and project tax rate apply in both currencies. Source websites can block scraping; dated fallbacks and manual overrides are disclosed rather than presented as current observations.
 """)
-        st.markdown(f"- [Damodaran industry unlevered betas]({BETA_URL}) — {info['beta_status']}")
-        st.markdown(f"- [Damodaran BBB spread]({SPREAD_URL}) — {info['spread_status']}")
-        st.markdown(f"- [OECD corporate income tax rates]({TAX_URL}) — {info['tax_status']}")
-        st.markdown(f"- [Trading Economics government yields]({TE_URL}) — {info['yield_status']}")
-        st.caption(f"Last attempted download: {info['fetched_at']}")
-        for err in info["errors"]:
+        st.markdown(f"- [Damodaran beta source]({BETA_URL}) — {info['beta_status']}")
+        st.markdown(f"- [Damodaran borrowing-spread source]({SPREAD_URL}) — {info['spread_status']}")
+        st.markdown(f"- [OECD tax source]({TAX_URL}) — {info['tax_status']}")
+        st.markdown(f"- [Trading Economics yields]({TE_URL}) — {info['yield_status']}")
+        st.caption(f"Retrieval attempt: {info['fetched_at']}")
+        for err in info['errors']:
             st.warning(err)
-    with st.expander("Built-in lecture calculation check (Colombia, slides 578–585)"):
-        check=compute(.8,.30,.35,.065,.04,.12,.015)
-        st.write({"Relevered beta":round(check["beta_e"],6),
-                  "USD equity (%)":round(check["re_us"]*100,4),
-                  "USD pretax debt (%)":round(check["rd_us"]*100,4),
-                  "USD WACC (%)":round(check["wacc_us"]*100,4),
-                  "COP equity (%)":round(check["re_local"]*100,4),
-                  "COP pretax debt (%)":round(check["rd_local"]*100,4),
-                  "COP WACC (%)":round(check["wacc_local"]*100,4)})
-        st.caption("These are the slides' illustrative inputs, not current Colombia market observations.")
+    with st.expander("Independent test: Colombia lecture example"):
+        check=compute(.80,.30,.35,.065,.04,.12,.015)
+        st.write({"Relevered beta":round(check['beta_e'],6),
+          "USD equity (%)":round(check['re_us']*100,4),"USD WACC (%)":round(check['wacc_us']*100,4),
+          "Colombia equity (%)":round(check['re_local']*100,4),
+          "Colombia WACC (%)":round(check['wacc_local']*100,4)})
 
 if __name__ == "__main__":
     main()
