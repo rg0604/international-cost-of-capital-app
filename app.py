@@ -281,17 +281,25 @@ def data_source_label(name: str, online: dict, base: dict, status: str) -> str:
 
 def main() -> None:
     """Lecture-slide-first layout, with detailed manual overrides folded away."""
+    # The layout, type hierarchy and visible controls follow lecture slide 588.
     st.markdown("""<style>
-      .block-container {max-width: 1160px; padding-top: 2.0rem;}
-      [data-testid="stSidebar"] {background: #f7f7f7;}
-      [data-testid="stSidebar"] .block-container {padding-top: 1.4rem;}
-      h1 {font-size: 2.1rem !important; letter-spacing: -.035em;}
-      h2 {font-size: 1.3rem !important; letter-spacing: -.02em;}
-      h3 {font-size: 1.08rem !important;}
-      [data-testid="stMetricValue"] {font-size: 1.75rem;}
-      [data-testid="stMetricLabel"] {font-size: .83rem;}
-      div[data-testid="stVerticalBlock"] > div:has(> [data-testid="stMetric"]) {padding-top: .3rem;}
-      hr {margin: .7rem 0 1.2rem;}
+      .block-container {max-width: 1480px; padding-top: 3.0rem; padding-bottom: 3rem;}
+      [data-testid="stSidebar"] {background-color: #f7f7f7; min-width: 280px;}
+      [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {gap: .45rem;}
+      [data-testid="stSidebar"] .block-container {padding-top: 2.4rem;}
+      h1 {font-size: 2.45rem !important; letter-spacing: -.04em; font-weight: 750 !important; margin-bottom: .35rem;}
+      h2 {font-size: 1.55rem !important; font-weight: 650 !important; letter-spacing: -.025em; margin-top: 1.15rem !important;}
+      h3 {font-size: 1.28rem !important; font-weight: 650 !important; letter-spacing: -.018em;}
+      [data-testid="stMetricValue"] {font-size: 2.05rem; font-weight: 420; letter-spacing: -.025em;}
+      [data-testid="stMetricLabel"] {font-size: .86rem; color: #404040;}
+      [data-testid="stCaptionContainer"] {color: #7a7a7a;}
+      div[data-testid="stMetric"] {padding: .35rem 0 .65rem;}
+      hr {margin: 1.4rem 0 1.35rem; border-color: #e5e5e5;}
+      [data-testid="stExpander"] {border: 1px solid #e6e6e6;}
+      [data-testid="stSidebar"] [data-testid="stButton"] button {border-color: #dedede;}
+      @media(min-width: 1200px) {
+        [data-testid="stAppViewContainer"] .main .block-container {padding-left: 3.4rem; padding-right: 3.4rem;}
+      }
     </style>""", unsafe_allow_html=True)
     if "refresh_counter" not in st.session_state:
         st.session_state.refresh_counter = 0
@@ -302,12 +310,12 @@ def main() -> None:
     country_list = country_options()
 
     with st.sidebar:
-        st.subheader("Project assumptions")
+        st.markdown("#### Project assumptions")
         if st.button("↻ Refresh sources data", use_container_width=True):
             st.session_state.refresh_counter += 1
             st.rerun()
         industry = st.selectbox("U.S. industry", industries, index=industries.index(DEFAULT_INDUSTRY))
-        st.caption("Damodaran's U.S. industry unlevered beta")
+        st.selectbox("Unlevered beta measure", ["Unlevered beta"], help="Damodaran U.S. industry unlevered beta, used to derive project equity beta.")
         exact = industry_frame[industry_frame["industry"].str.casefold() == industry.casefold()]
         if exact.empty and industry == DEFAULT_INDUSTRY and not industry_frame.empty:
             exact = industry_frame[industry_frame["industry"].str.contains(r"software.*(system|application)", case=False, regex=True)]
@@ -330,12 +338,14 @@ def main() -> None:
                     value=float(spread if spread is not None else 1.5), step=0.05)
         else:
             usd_spread_pp = spread
-        if spread is None:
-            st.caption("1.50% is only the lecture illustration, not a current market quote.")
+        st.caption(f"BBB spread: {float(spread if spread is not None else usd_spread_pp):.2f}% ({float(spread if spread is not None else usd_spread_pp)*100:.0f} basis points) · {info['spread_status']}")
+        st.number_input("USD borrowing spread over U.S. 10-year yield (percentage points)",
+                        value=float(usd_spread_pp), disabled=not spread_override,
+                        min_value=0.0, max_value=40.0, step=.05, key="slide_spread_display")
         country = st.selectbox("Project country / currency", country_list,
                       index=country_list.index(US_NAME))
-        use_local_tax = st.checkbox("Override corporate tax rate selection: use target country", value=False)
-        st.caption("Unselected: U.S. corporate tax rate. One project tax rate applies in both currencies.")
+        use_local_tax = st.checkbox("Override corporate tax rate", value=False, help="Use the selected-country tax rate rather than the U.S. corporate tax rate.")
+        st.caption("OECD statutory corporate tax rate. One project tax rate applies in both currencies.")
 
     # Inputs shared between the two currency calculations
     tax_us = info["tax"].get(US_NAME)
@@ -354,11 +364,11 @@ def main() -> None:
                     value=float(rf_us if rf_us is not None else 4.9), step=0.10)
         else:
             us_yield_pp = rf_us
-        st.caption(f"Source: {info['yield_status']}")
+        st.caption(f"Source quote: {rf_us:.3f}% · {info['yield_status']}" if rf_us is not None else f"Source: {info['yield_status']}")
     with ycol2:
         st.markdown(f"**Selected country: {country}**")
         if country == US_NAME:
-            st.caption("The selected country is the United States (USD). No currency conversion is needed.")
+            st.caption("The selected-country yield equals the U.S. yield. No currency conversion is needed.")
             local_yield_pp = us_yield_pp
             local_yield_manual = False
         else:
@@ -368,13 +378,14 @@ def main() -> None:
                       max_value=100.0, value=float(rf_local if rf_local is not None else 0.0), step=0.10)
             else:
                 local_yield_pp = rf_local
-            st.caption(f"Source: {info['yield_status']}")
+            st.caption(f"Source quote: {rf_local:.3f}% · {info['yield_status']}" if rf_local is not None else f"Source: {info['yield_status']}")
     if us_yield_pp is None or local_yield_pp is None:
         st.error("Yield is missing. Enable the appropriate manual yield input.")
         st.stop()
 
-    # Tax overrides are required by the assignment but belong in secondary settings.
-    with st.expander("Advanced inputs: tax rates and foreign-currency borrowing spread"):
+    # Required overrides are kept below the visible slide layout in the sidebar,
+    # rather than interrupting its sequence of yields → borrowing spread → results.
+    with st.sidebar.expander("Advanced inputs: tax rates and foreign BBB spread") :
         a,b = st.columns(2)
         with a:
             tax_us_override = st.checkbox("Override U.S. corporate tax rate", value=tax_us is None)
@@ -413,11 +424,14 @@ def main() -> None:
             usd_spread_pp/100, local_spread_pp/100 if foreign_override else None)
 
     st.subheader("Borrowing spreads")
-    sc1, sc2 = st.columns(2)
-    sc1.metric("Borrowing spread · USD", f"{usd_spread_pp:.4f}%")
-    sc2.metric(f"Borrowing spread · {country}", f"{result['spread_local']*100:.4f}%")
-    st.caption(f"USD credit benchmark: {info['spread_status']}. The foreign spread is {'manually overridden' if foreign_override else 'converted using the government-yield factor'}. ")
-    st.divider()
+    if country == US_NAME:
+        st.metric("Borrowing spread · USD", f"{usd_spread_pp:.4f}%")
+        st.caption(f"{usd_spread_pp*100:.2f} basis points over the U.S. 10-year yield · {info['spread_status']}")
+    else:
+        sc1, sc2 = st.columns(2)
+        sc1.metric("Borrowing spread · USD", f"{usd_spread_pp:.4f}%")
+        sc2.metric(f"Borrowing spread · {country}", f"{result['spread_local']*100:.4f}%")
+        st.caption(f"USD benchmark: {info['spread_status']}. Foreign spread: {'manual override' if foreign_override else 'converted with the government-yield factor'}.")
 
     st.subheader(industry)
     st.caption(f"{country} · U.S. industry beta data: {info['beta_status']}. Applied corporate tax: {tax_pp:.2f}% ({'selected country' if use_local_tax else 'United States'}).")
@@ -427,17 +441,24 @@ def main() -> None:
     m3.metric("Corporate tax rate", f"{tax_pp:.2f}%")
     m4.metric("Unlevered beta", f"{beta_u:.4f}")
     st.divider()
-    left,right = st.columns(2, gap="large")
-    with left:
-        st.markdown("**USD cost of capital**")
-        st.metric("Equity cost of capital · USD", rate(result["re_us"]))
-        st.metric("WACC · USD", rate(result["wacc_us"]))
-        st.caption(f"Pretax debt cost: {rate(result['rd_us'])} · After-tax: {rate(result['rd_us']*(1-result['tax']))}")
-    with right:
-        st.markdown(f"**{country} cost of capital**")
-        st.metric(f"Equity cost of capital · {country}", rate(result["re_local"]))
-        st.metric(f"WACC · {country}", rate(result["wacc_local"]))
-        st.caption(f"Pretax debt cost: {rate(result['rd_local'])} · After-tax: {rate(result['rd_local']*(1-result['tax']))}")
+    if country == US_NAME:
+        # Slide 588 shows two large side-by-side numbers for the U.S. default.
+        eq, wacc = st.columns(2, gap="large")
+        eq.metric("Equity cost of capital · USD", rate(result["re_us"]))
+        wacc.metric("WACC · USD", rate(result["wacc_us"]))
+        st.caption(f"Pretax borrowing cost: {rate(result['rd_us'])} · After-tax borrowing cost: {rate(result['rd_us']*(1-result['tax']))}")
+    else:
+        left, right = st.columns(2, gap="large")
+        with left:
+            st.markdown("**USD cost of capital**")
+            st.metric("Equity cost of capital · USD", rate(result["re_us"]))
+            st.metric("WACC · USD", rate(result["wacc_us"]))
+            st.caption(f"Pretax debt cost: {rate(result['rd_us'])} · After-tax: {rate(result['rd_us']*(1-result['tax']))}")
+        with right:
+            st.markdown(f"**{country} cost of capital**")
+            st.metric(f"Equity cost of capital · {country}", rate(result["re_local"]))
+            st.metric(f"WACC · {country}", rate(result["wacc_local"]))
+            st.caption(f"Pretax debt cost: {rate(result['rd_local'])} · After-tax: {rate(result['rd_local']*(1-result['tax']))}")
     st.caption(f"Relevered beta: {result['beta_e']:.4f} · Debt financing: {st.session_state.debt_pp}% · ERP: {st.session_state.erp_pp:.2f}% · Identical project tax rate in both currencies.")
 
     # Keep all assignment-required comparisons and downloads without overwhelming the landing page.
